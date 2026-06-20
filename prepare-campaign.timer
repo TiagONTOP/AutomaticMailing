@@ -1,0 +1,10 @@
+[Unit]
+Description=Declenche la preparation de campagne 1x par jour ouvre (lun-ven)
+
+[Timer]
+# 1x/jour ouvre, le matin. Persistent=true rattrape un run manque (machine off).
+OnCalendar=Mon..Fri 09:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

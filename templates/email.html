@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="fr" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- dark-only : on déclare le mail comme déjà optimisé sombre pour que les
+       clients (Apple Mail, iOS, Outlook app…) N'INVERSENT PAS les couleurs. -->
+  <meta name="color-scheme" content="dark">
+  <meta name="supported-color-schemes" content="dark">
+  <title>FrenchQuant</title>
+  <!--[if mso]><style>*{font-family:'Courier New',monospace !important;}</style><![endif]-->
+  <style>
+    :root { color-scheme: dark; supported-color-schemes: dark; }
+    a { text-decoration: none; }
+
+    /* Si un client passe quand même en clair, on réimpose le thème FrenchQuant. */
+    @media (prefers-color-scheme: light) {
+      .fq-bg     { background-color:#000000 !important; }
+      .fq-card   { background-color:#09090b !important; }
+      .fq-white  { color:#ffffff !important; }
+      .fq-text   { color:#e4e4e7 !important; }
+      .fq-muted  { color:#71717a !important; }
+      .fq-faint  { color:#52525b !important; }
+      .fq-accent { color:#7c3aed !important; }
+    }
+
+    /* Gmail (app) & Outlook.com : ces clients inversent les couleurs et préfixent
+       les éléments avec data-ogsc/data-ogsb. On réassigne explicitement nos
+       couleurs pour rester dans la DA sombre FrenchQuant. */
+    u + .fq-body .fq-bg,
+    [data-ogsb] .fq-bg, [data-ogsc] .fq-bg     { background-color:#000000 !important; }
+    [data-ogsb] .fq-card, [data-ogsc] .fq-card { background-color:#09090b !important; }
+    [data-ogsc] .fq-white  { color:#ffffff !important; }
+    [data-ogsc] .fq-text   { color:#e4e4e7 !important; }
+    [data-ogsc] .fq-muted  { color:#71717a !important; }
+    [data-ogsc] .fq-faint  { color:#52525b !important; }
+    [data-ogsc] .fq-accent { color:#7c3aed !important; }
+
+    @media (max-width:600px){
+      .fq-card { width:100% !important; }
+      .fq-pad  { padding-left:22px !important; padding-right:22px !important; }
+    }
+  </style>
+</head>
+<!--
+  Template email FrenchQuant — DA du site (noir / violet #7c3aed / Space Mono / terminal).
+  FORCÉ EN SOMBRE quel que soit le thème du client (anti-inversion Gmail/Outlook).
+  Email-safe : tables, styles inline, fallback monospace, classes fq-* pour le ré-override.
+  Jetons remplis par common.render_html_email() : {{PREHEADER}} {{BODY}} {{CTA}} {{FOOTER}}.
+  Pied identité + désinscription OBLIGATOIRE (Règle d'Or #4) dans {{FOOTER}}.
+-->
+<body class="fq-body" style="margin:0;padding:0;background-color:#000000;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;color:#000000;font-size:1px;line-height:1px;">{{PREHEADER}}</div>
+  <table role="presentation" class="fq-bg" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#000000" style="background-color:#000000;">
+    <tr>
+      <td align="center" style="padding:32px 12px;">
+        <table role="presentation" class="fq-card" width="600" cellpadding="0" cellspacing="0" border="0" bgcolor="#09090b" style="width:600px;max-width:600px;background-color:#09090b;border:1px solid #27272a;border-top:3px solid #7c3aed;">
+
+          <!-- En-tête : lockup terminal -->
+          <tr>
+            <td class="fq-pad" style="padding:28px 36px 6px 36px;font-family:'Space Mono','SFMono-Regular',Menlo,Consolas,'Courier New',monospace;">
+              <span class="fq-white" style="font-size:15px;letter-spacing:3px;color:#ffffff;font-weight:bold;">FRENCHQUANT</span><span class="fq-accent" style="color:#7c3aed;font-weight:bold;">_</span>
+              <div class="fq-faint" style="font-size:10px;letter-spacing:2px;color:#52525b;margin-top:5px;">// CODE IS TRUTH</div>
+            </td>
+          </tr>
+
+          <!-- Corps du message -->
+          <tr>
+            <td class="fq-pad fq-text" style="padding:18px 36px 0 36px;font-family:'Space Mono','SFMono-Regular',Menlo,Consolas,'Courier New',monospace;font-size:14px;line-height:1.75;color:#e4e4e7;">
+              {{BODY}}
+              {{CTA}}
+            </td>
+          </tr>
+
+          <!-- Pied : identité + désinscription (Règle d'Or #4) -->
+          <tr>
+            <td class="fq-pad" style="padding:6px 36px 30px 36px;">
+              <div style="border-top:1px solid #27272a;line-height:1px;font-size:1px;height:1px;">&nbsp;</div>
+              <div class="fq-muted" style="padding-top:16px;font-family:'Space Mono','SFMono-Regular',Menlo,Consolas,'Courier New',monospace;font-size:11px;line-height:1.7;color:#71717a;">
+                {{FOOTER}}
+              </div>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

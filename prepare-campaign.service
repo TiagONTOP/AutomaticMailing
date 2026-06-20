@@ -1,0 +1,10 @@
+[Unit]
+Description=Agent Prospection FrenchQuant — preparation (ciblage + redaction + notifications, sans envoi)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/frenchquant/mailing_agent
+EnvironmentFile=%h/frenchquant/mailing_agent/.env
+ExecStart=%h/frenchquant/mailing_agent/.venv/bin/python prepare_campaign.py
