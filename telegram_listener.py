@@ -713,7 +713,14 @@ def handle_update(conn, update: dict) -> None:
             common.tg_answer_callback(callback["id"], "Non autorisé.")
             logger.warning("Callback ignoré : chat %s non autorisé.", chat_id)
             return
-        common.tg_answer_callback(callback["id"])  # stoppe le spinner
+        # Best effort : answerCallbackQuery echoue (HTTP 400) si le callback est
+        # perime (repondu trop tard). Ce n'est PAS bloquant — on ne doit pas pour
+        # autant abandonner l'action ni spammer l'utilisateur d'une erreur. On log
+        # et on poursuit le traitement (send / edit / skip / block / bcast).
+        try:
+            common.tg_answer_callback(callback["id"])  # stoppe le spinner
+        except requests.RequestException as exc:
+            logger.warning("answerCallbackQuery a echoue (callback perime ?) : %s", exc)
         message_id = callback["message"]["message_id"]
         action, _, token = (callback.get("data") or "").partition(":")
         # Prospection

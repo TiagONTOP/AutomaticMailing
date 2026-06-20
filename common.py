@@ -609,11 +609,22 @@ def delete_broadcast(conn: sqlite3.Connection, token: str) -> None:
 # API Telegram (appels HTTP directs, pas de SDK) — repris de MailManager
 # --------------------------------------------------------------------------- #
 def tg_api(method: str, payload: dict | None = None, http_timeout: int = 30) -> dict:
-    """Appel générique à l'API Bot Telegram. Lève sur erreur HTTP."""
+    """Appel générique à l'API Bot Telegram. Lève sur erreur HTTP.
+
+    On ne propage JAMAIS l'URL brute dans l'exception : elle contient le token
+    (Règle d'Or #6 — sinon le secret finit dans journalctl). On remonte le code
+    HTTP et la `description` renvoyée par Telegram, bien plus utile au debug."""
     token = os.environ["TELEGRAM_TOKEN"]
     url = f"https://api.telegram.org/bot{token}/{method}"
     resp = requests.post(url, json=payload or {}, timeout=http_timeout)
-    resp.raise_for_status()
+    if not resp.ok:
+        try:
+            desc = resp.json().get("description", "")
+        except ValueError:
+            desc = (resp.text or "")[:300]
+        raise requests.HTTPError(
+            f"Telegram {method} -> HTTP {resp.status_code}: {desc}", response=resp
+        )
     return resp.json()
 
 

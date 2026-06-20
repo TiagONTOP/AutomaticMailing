@@ -7,4 +7,8 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/frenchquant/mailing_agent
 EnvironmentFile=%h/frenchquant/mailing_agent/.env
+# Le PATH d'un service systemd user n'inclut PAS ~/.local/bin. Or claude-agent-sdk
+# lance le binaire `claude` (qui requiert Node), tous deux dans ~/.local/bin. Sans
+# ce PATH explicite, la redaction echoue au runtime ("claude" introuvable).
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=%h/frenchquant/mailing_agent/.venv/bin/python prepare_campaign.py
