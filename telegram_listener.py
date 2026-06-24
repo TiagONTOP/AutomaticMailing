@@ -709,6 +709,38 @@ def handle_command(conn, chat_id, text) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Anti double-clic / anti-spam sur les actions d'ENVOI
+# --------------------------------------------------------------------------- #
+# Un double-tap sur un bouton Telegram genere DEUX callback_query identiques.
+# Sans garde, « Valider » (envoi du test) ou « Diffuser » partent deux fois ->
+# l'utilisateur recoit le meme mail en double. On deduplique en memoire par
+# (action, token) sur une courte fenetre : un re-clic en rafale du MEME bouton
+# est ignore. Ne concerne QUE les actions qui declenchent un ENVOI (les actions
+# de navigation/edition restent idempotentes et toujours actives).
+_SEND_ACTIONS = {"send", "bcast", "bgo"}
+_ACTION_DEBOUNCE_S = 8.0
+_RECENT_ACTIONS: dict[str, float] = {}
+
+
+def _is_duplicate_click(action: str, token: str) -> bool:
+    """True si (action, token) a deja ete traite il y a moins de
+    _ACTION_DEBOUNCE_S secondes (= double-clic) ; l'appelant doit alors ignorer
+    le callback. Enregistre l'instant sinon. Garde-fou complementaire des checks
+    'status==sent' cote DB et du traitement mono-thread de la boucle."""
+    key = f"{action}:{token}"
+    now = time.monotonic()
+    last = _RECENT_ACTIONS.get(key)
+    if last is not None and (now - last) < _ACTION_DEBOUNCE_S:
+        return True
+    _RECENT_ACTIONS[key] = now
+    if len(_RECENT_ACTIONS) > 256:  # purge opportuniste pour borner la taille
+        cutoff = now - _ACTION_DEBOUNCE_S
+        for k in [k for k, t in _RECENT_ACTIONS.items() if t < cutoff]:
+            _RECENT_ACTIONS.pop(k, None)
+    return False
+
+
+# --------------------------------------------------------------------------- #
 # Dispatch d'un update
 # --------------------------------------------------------------------------- #
 def handle_update(conn, update: dict) -> None:
@@ -720,9 +752,22 @@ def handle_update(conn, update: dict) -> None:
             common.tg_answer_callback(callback["id"], "Non autorisé.")
             logger.warning("Callback ignoré : chat %s non autorisé.", chat_id)
             return
-        common.tg_answer_callback(callback["id"])  # stoppe le spinner
+        # Best effort : answerCallbackQuery echoue (HTTP 400) si le callback est
+        # perime (repondu trop tard). Ce n'est PAS bloquant — on ne doit pas pour
+        # autant abandonner l'action ni spammer l'utilisateur d'une erreur. On log
+        # et on poursuit le traitement (send / edit / skip / block / bcast).
+        try:
+            common.tg_answer_callback(callback["id"])  # stoppe le spinner
+        except requests.RequestException as exc:
+            logger.warning("answerCallbackQuery a echoue (callback perime ?) : %s", exc)
         message_id = callback["message"]["message_id"]
         action, _, token = (callback.get("data") or "").partition(":")
+        # Anti double-clic : un re-clic en rafale d'un bouton d'ENVOI ne doit pas
+        # renvoyer le meme mail. Les actions de navigation (edit/retour/annuler)
+        # ne sont pas filtrees (idempotentes).
+        if action in _SEND_ACTIONS and _is_duplicate_click(action, token):
+            logger.warning("Double-clic ignore (anti-spam) : action=%s token=%s", action, token)
+            return
         # Prospection
         if action == "send":
             handle_send(conn, chat_id, message_id, token)

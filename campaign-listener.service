@@ -1,0 +1,24 @@
+[Unit]
+# NOTE multi-agents : ce service s'appelle campaign-listener.service (et NON
+# mail-listener.service) pour ne PAS entrer en collision avec le listener de
+# MailManager (~/.config/systemd/user/mail-listener.service), deja installe et
+# actif sur ce meme VPS. Les deux agents tournent en parallele sous claudeuser ;
+# noms d'unites distincts = pas d'ecrasement (Regle d'Or : un seul chemin d'envoi).
+Description=Agent Prospection FrenchQuant — listener Telegram (always-on, seul a envoyer via Mailgun)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/frenchquant/mailing_agent
+EnvironmentFile=%h/frenchquant/mailing_agent/.env
+# Coherence avec prepare-campaign.service : PATH explicite incluant ~/.local/bin.
+# Le listener appelle claude-agent-sdk (commandes /prospect, /prospects, /mail),
+# qui lance le binaire `claude` (Node) depuis ~/.local/bin — absent du PATH par
+# defaut d'un service systemd user.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/frenchquant/mailing_agent/.venv/bin/python telegram_listener.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
