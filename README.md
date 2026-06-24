@@ -92,6 +92,36 @@ Pour chaque prospect préparé :
 - **Ignorer** → supprime le `pending` sans rien envoyer (reste éligible).
 - **Ne plus contacter** → ajoute à `suppressed` (raison `manual`).
 
+## Commandes Telegram (pilotage à la demande)
+
+Deux modes d'envoi bien distincts. Aucun ne part sans ton action explicite.
+
+**Prospection 1:1 (single-touch, quelques mails ultra-personnalisés)** — c'est ce
+que fait le timer automatiquement, et que tu peux déclencher à la main :
+
+| Commande | Effet |
+|---|---|
+| `/prospect <email> [consigne]` | Rédige **un** mail 1:1 pour un abonné précis. |
+| `/prospects [N]` | Sélectionne jusqu'à `N` prospects éligibles et rédige un mail pour chacun (borné, défaut `CAMPAIGN_BATCH_SIZE`, max 10). |
+| `/who [N]` | Aperçu (lecture seule) des prochains prospects éligibles. |
+
+> ⚠️ La prospection est **volontairement bornée** (single-touch, qualité maximale).
+> Elle prépare quelques brouillons 1:1 **puis s'arrête** : ce n'est pas un bug,
+> c'est la stratégie d'envoi retenue (cf. [CLAUDE.md](CLAUDE.md)). Elle n'arrose
+> jamais toute la base.
+
+**Diffusion batch à TOUTE la base (un seul mail pour tout le monde)** :
+
+| Commande | Effet |
+|---|---|
+| `/mail <sujet>` | L'agent rédige **un** mail pour **toute la base opt-in**. Flux : ✅ Valider (→ tu reçois un **test**) → ✏️ Éditer (re-rédaction en langage naturel) → 📣 **Diffuser à N** (envoi **batch individuel** via Mailgun à tout l'opt-in, hors désinscrits). |
+| `/help` | Rappel des commandes. |
+
+> 💡 **« Envoyer le même mail à toute ma base » = `/mail`**, pas la prospection.
+> La diffusion couvre **tout l'opt-in** (prospects *et* clients) ; chaque
+> destinataire reçoit un message individuel (il ne voit pas les autres adresses),
+> avec identité + désinscription. Les désinscrits (`suppressed`) sont exclus.
+
 ## Déploiement systemd (user, rootless) — identique à MailManager
 
 Le code est attendu dans `~/frenchquant/mailing_agent/` (cf. units). Prérequis

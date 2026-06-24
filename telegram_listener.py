@@ -385,7 +385,14 @@ def handle_prospects_command(conn, chat_id, arg) -> None:
             # Un prospect qui plante n'arrête pas le lot (cf. Conventions de code).
             logger.exception("Échec de préparation pour %s", prospect.get("email"))
             common.tg_send(chat_id, f"⚠️ Erreur pour {prospect.get('email', '?')} : {exc}")
-    common.tg_send(chat_id, f"✅ {ok} brouillon(s) prêt(s) — valide chacun avec ses boutons.")
+    common.tg_send(
+        chat_id,
+        f"✅ {ok} brouillon(s) prêt(s) (prospection 1:1, single-touch) — valide "
+        "chacun avec ses boutons.\n\n"
+        "ℹ️ /prospects est de la prospection single-touch (un prospect à la fois, "
+        "borné). Pour envoyer UN SEUL mail à TOUTE ta base d'un coup (batch), "
+        "utilise /mail <sujet>.",
+    )
 
 
 def handle_who_command(conn, chat_id, arg) -> None:

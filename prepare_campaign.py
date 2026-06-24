@@ -83,8 +83,9 @@ def load_corpus() -> str:
     if not CORPUS_DIR.exists():
         return ""
     parts: list[str] = []
-    # Fichiers de tête, dans un ordre stable et utile au modèle.
-    for name in ("offers.md", "voice.md", "pains.md"):
+    # Fichiers de tête, dans un ordre stable et utile au modèle :
+    # faits offres -> voix -> preuves techniques -> angles douleur -> catalogue.
+    for name in ("offers.md", "voice.md", "proof.md", "pains.md", "catalog.md"):
         path = CORPUS_DIR / name
         if path.exists():
             parts.append(f"## corpus/{name}\n\n{path.read_text(encoding='utf-8')}")
@@ -433,9 +434,11 @@ def main() -> None:
         conn.close()
         return
 
+    prepared = 0
     for prospect in prospects:
         try:
             process_one(conn, chat_id, context, prospect)
+            prepared += 1
         except Exception as exc:
             # Un prospect qui plante ne doit pas faire échouer tout le run : on
             # notifie, et on continue (cf. Conventions de code CLAUDE.md).
@@ -449,8 +452,24 @@ def main() -> None:
             except Exception:
                 logger.exception("Échec de la notification d'erreur Telegram.")
 
+    # Récap de fin de run. La prospection est VOLONTAIREMENT single-touch et bornée
+    # (CAMPAIGN_BATCH_SIZE) : elle prépare quelques mails 1:1 puis s'arrête, ce
+    # n'est pas un bug. Pour écrire à TOUTE la base en un seul mail batch, c'est la
+    # commande /mail (diffusion) — on le rappelle ici pour la découvrabilité.
+    if prepared:
+        try:
+            common.tg_send(
+                chat_id,
+                f"📬 Prospection du jour : {prepared} brouillon(s) 1:1 prêt(s) "
+                "(single-touch — valide chacun avec ses boutons).\n\n"
+                "ℹ️ Pour adresser TOUTE ta base en UN SEUL mail (batch), ce n'est "
+                "pas la prospection : utilise la commande /mail <sujet>.",
+            )
+        except Exception:
+            logger.exception("Échec de la notification de récap Telegram.")
+
     conn.close()
-    logger.info("Run de préparation terminé.")
+    logger.info("Run de préparation terminé (%d brouillon(s) préparé(s)).", prepared)
 
 
 if __name__ == "__main__":
