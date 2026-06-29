@@ -437,7 +437,7 @@ CREATE TABLE IF NOT EXISTS broadcasts (
     subject    TEXT,                 -- objet proposé
     body       TEXT,                 -- corps + pied, en attente de diffusion
     topic      TEXT,                 -- sujet demandé via Telegram (debug)
-    status     TEXT,                 -- 'draft' (test envoyé) | 'sent' (diffusé)
+    status     TEXT,                 -- 'draft' | 'sending' (diffusion en cours) | 'sent'
     created_at TEXT
 );
 """
@@ -591,6 +591,33 @@ def update_broadcast(conn: sqlite3.Connection, token: str, subject: str, body: s
     conn.execute(
         "UPDATE broadcasts SET subject = ?, body = ?, status = 'draft' WHERE token = ?",
         (subject, body, token),
+    )
+    conn.commit()
+
+
+def claim_broadcast_for_send(conn: sqlite3.Connection, token: str) -> bool:
+    """Réserve ATOMIQUEMENT un broadcast pour diffusion : 'draft' -> 'sending'.
+    Renvoie True UNIQUEMENT pour l'appel gagnant (rowcount == 1).
+
+    Empêche STRUCTURELLEMENT la double-diffusion (Règle d'Or #2) — double-clic,
+    course entre updates, redémarrage du listener : un seul appelant peut passer
+    de 'draft' à 'sending'. L'appelant ne doit envoyer QUE s'il obtient True ; en
+    cas d'échec d'envoi, restaurer via revert_broadcast_to_draft (le mail n'est
+    pas parti). Bien plus robuste que l'ancien check-then-act sur status."""
+    cur = conn.execute(
+        "UPDATE broadcasts SET status = 'sending' WHERE token = ? AND status = 'draft'",
+        (token,),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def revert_broadcast_to_draft(conn: sqlite3.Connection, token: str) -> None:
+    """Restaure un broadcast 'sending' en 'draft' après un échec d'envoi, pour
+    autoriser un réessai (le mail n'est PAS parti)."""
+    conn.execute(
+        "UPDATE broadcasts SET status = 'draft' WHERE token = ? AND status = 'sending'",
+        (token,),
     )
     conn.commit()
 

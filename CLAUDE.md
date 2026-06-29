@@ -7,20 +7,32 @@ modèle de sécurité et les conventions.
 
 ## Vue d'ensemble
 
-Agent qui, de façon planifiée, **identifie des prospects tièdes** dans la base
-Supabase de FrenchQuant (abonnés newsletter **qui n'ont pas encore acheté
-FQ-KERNEL**), **rédige un mail de prospection ultra-personnalisé** dans la voix
-FrenchQuant, et **pousse un récap sur Telegram avec des boutons de validation**.
-Le mail propose un **call** (Calendly) aux prospects qui hésitent à passer à
-l'action et renvoie vers le site pour les offres.
+Agent dont la fonction **PRINCIPALE** est de **diffuser un mail à TOUTE la base
+opt-in** de FrenchQuant (abonnés newsletter — prospects *et* clients) **pour en
+convertir certains** vers FQ-KERNEL, **dans la voix FrenchQuant**, et de **pousser
+le brouillon sur Telegram avec des boutons de validation**. La diffusion est
+déclenchée **à la main** via la commande `/mail` (jamais automatiquement). Le mail
+renvoie vers le site (offres) et propose un **call** (Calendly) à ceux qui hésitent.
+
+En **option secondaire, à la demande**, l'agent sait aussi rédiger des mails de
+**prospection 1:1** ultra-personnalisés (commandes `/prospect`, `/prospects`,
+`/who`). ⚠️ Cette prospection 1:1 **n'est PLUS automatique** : le timer ne prépare
+plus de lot quotidien (recentrage sur la diffusion — cf. `prepare_campaign.main()`
+et `PROSPECTION_AUTORUN`). Elle reste **single-touch**.
 
 **Aucun mail n'est JAMAIS envoyé sans une action explicite de l'utilisateur
 depuis Telegram.** L'agent prépare et propose ; l'humain valide ; seul le
 listener envoie (via Mailgun).
 
-Stratégie d'envoi retenue : **single-touch, qualité maximale**. Quelques mails
-très personnalisés par run, **un seul contact par prospect, aucune relance
-automatique**. La priorité est la pertinence et la délivrabilité, pas le volume.
+Deux canaux d'envoi, deux régimes (mais **mêmes Règles d'Or**) :
+- **Diffusion à la base (`/mail`, canal PRINCIPAL)** : un mail batch à tout
+  l'opt-in, déclenché manuellement, **répétable** (mais à fréquence basse pour la
+  délivrabilité). Garde-fous : opt-in only, désinscrits (`suppressed`) exclus,
+  lien de désinscription, **aperçu à l'opérateur** (objet réel) avant diffusion,
+  puis **confirmation explicite** « Diffuser à N ».
+- **Prospection 1:1 (`/prospect…`, canal secondaire, à la demande)** :
+  **single-touch** — un prospect n'est contacté qu'une fois (table `contacted`),
+  aucune relance automatique. Priorité pertinence + délivrabilité, pas volume.
 
 Le système tourne sur le **VPS Hetzner Ubuntu**, sous l'utilisateur `claudeuser`
 (non-root, Docker rootless), dans `~/frenchquant/mailing_agent/`.
@@ -50,12 +62,17 @@ respecter. Si une demande pousse à en violer une, **arrête-toi et signale-le**
    `gmail.readonly` de MailManager : même en cas de bug, le périmètre de dégât
    reste borné à de la lecture.
 
-4. **Single-touch & opt-out sacré.** Un prospect n'est contacté **qu'une seule
-   fois** (table `contacted`). Avant toute rédaction, vérifier qu'il n'est ni
-   dans `contacted`, ni dans `suppressed`. **Chaque mail contient un lien de
-   désinscription** et l'identité de l'expéditeur (conformité RGPD / LCEN /
-   CAN-SPAM). Une désinscription est honorée immédiatement et définitivement.
-   Ne JAMAIS retirer le lien de désinscription ni recontacter un opt-out.
+4. **Single-touch (prospection) & opt-out sacré (PARTOUT).** En **prospection
+   1:1**, un prospect n'est contacté **qu'une seule fois** (table `contacted`) :
+   avant rédaction, vérifier qu'il n'est ni dans `contacted`, ni dans
+   `suppressed`. La **diffusion à la base** (`/mail`) est, elle, délibérément
+   **répétable** (elle ne touche pas `contacted`) — mais elle reste bornée par
+   l'opt-out : on EXCLUT toujours les `suppressed` (et l'adresse opérateur, qui a
+   déjà reçu l'aperçu). Dans **tous** les cas : base **opt-in uniquement**,
+   **chaque mail contient un lien de désinscription** et l'identité de
+   l'expéditeur (conformité RGPD / LCEN / CAN-SPAM). Une désinscription est
+   honorée immédiatement et définitivement. Ne JAMAIS retirer le lien de
+   désinscription ni recontacter un opt-out.
 
 5. **Verrou chat_id Telegram.** Le listener ignore TOUT update qui ne provient
    pas de `TELEGRAM_CHAT_ID`. Ne jamais retirer ou affaiblir ce contrôle : sans
@@ -82,35 +99,40 @@ services, rootless), plus un module de recherche optionnel.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  prepare-campaign.timer ──(1×/jour ouvré)──► prepare-campaign.svc │
+│  prepare-campaign.timer ──(désactivable)──► prepare-campaign.svc  │
 │                                              └─► prepare_campaign.py│
-│   (oneshot : cible Supabase, rédige, notifie — PAS d'envoi)        │
+│   (oneshot : auto-prospection 1:1 DÉSACTIVÉE — no-op par défaut ;   │
+│    réactivable via PROSPECTION_AUTORUN=1 ; jamais d'envoi)          │
 └──────────────────────────────────────────────────────────────────┘
                               │ écrit les mails proposés en attente
                               ▼
                          state.db (SQLite)
                               ▲
-                              │ lit les mails, les envoie sur validation
+                              │ /mail (diffusion) + boutons : envoie sur validation
 ┌──────────────────────────────────────────────────────────────────┐
-│  mail-listener.service ──(always-on, Restart=always)──►           │
+│  campaign-listener.service ──(always-on, Restart=always)──►           │
 │                          └─► telegram_listener.py                 │
-│   (long-running : écoute les callbacks, SEUL à envoyer via Mailgun)│
+│   (long-running : /mail = canal PRINCIPAL ; SEUL à envoyer Mailgun)│
 └──────────────────────────────────────────────────────────────────┘
 
     discover_pains.py  (optionnel, manuel/hebdo)  ──►  corpus/pains.md
     (social listening : douleurs sous-servies → angles, revus par toi)
 ```
 
-- **`prepare_campaign.py`** : déclenché par le timer. (1) Interroge Supabase
-  pour la liste des prospects éligibles (cf. *Ciblage*), (2) en retient un petit
-  lot jamais contacté, (3) pour chacun, construit le contexte (corpus + angle
-  douleur + offres + DA) et appelle Claude pour rédiger `subject` + `body`,
-  (4) stocke en `pending` dans `state.db`, (5) pousse une notif Telegram avec
-  boutons. **Ne fait jamais d'envoi.**
+- **`prepare_campaign.py`** : **module** importé par le listener (pour `/mail` et la
+  prospection à la demande) ET point d'entrée du timer. Fournit le ciblage
+  (`select_prospects`), le contexte (`build_context`), la rédaction 1:1
+  (`process_one`/`write_mail`) et la **composition de diffusion**
+  (`compose_broadcast`/`recompose_broadcast`). ⚠️ Son `main()` (timer) **ne prépare
+  PLUS de lot 1:1 automatiquement** (recentrage diffusion) : c'est un no-op qui
+  loggue, sauf `PROSPECTION_AUTORUN=1` qui rejoue `run_daily_prospection()`.
+  **Ne fait jamais d'envoi** (Règles d'Or #1, #2).
 - **`telegram_listener.py`** : tourne en continu (long-polling `getUpdates`).
-  Traite les boutons (`send` / `edit` / `skip` / `block`) et les réponses en
-  mode édition. **Seul composant autorisé à appeler Mailgun**, et seulement sur
-  action utilisateur.
+  Traite la **diffusion à la base** (`/mail` → boutons `bcast`/`bgo`/`bedit`/
+  `bcancel`, canal principal), les commandes de prospection à la demande
+  (`/prospect`, `/prospects`, `/who`), les boutons de prospection (`send` / `edit`
+  / `skip` / `block`) et les réponses en mode édition. **Seul composant autorisé à
+  appeler Mailgun**, et seulement sur action utilisateur.
 - **`discover_pains.py`** *(optionnel)* : phase de *discovery* amont. Scanne
   forums et réseaux (r/quant, r/algotrading, Quant Stack Exchange, Wilmott,
   X/Twitter quant…) pour repérer des **problèmes à forte douleur, peu résolus**,
@@ -406,7 +428,7 @@ l'API).
 ~/.config/systemd/user/
 ├── prepare-campaign.service
 ├── prepare-campaign.timer
-└── mail-listener.service
+└── campaign-listener.service
 ```
 
 `campaign_context.md` est **le fichier le plus important à faire évoluer** (comme
@@ -453,8 +475,10 @@ utiliser un `.env` chargé manuellement (helper `load_env` repris de MailManager
 
 ### Dev / test local
 ```bash
-# préparer une campagne à la main (cible + rédige + notifie, PAS d'envoi)
-.venv/bin/python prepare_campaign.py
+# la diffusion à la base se pilote via /mail dans le listener (ci-dessous).
+# `prepare_campaign.py` (entrée timer) est un no-op par défaut — auto-1:1 désactivée.
+# Pour rejouer le lot de prospection 1:1 à la main (exceptionnel, PAS d'envoi) :
+PROSPECTION_AUTORUN=1 .venv/bin/python prepare_campaign.py
 
 # lancer le listener en foreground (Ctrl-C pour stopper)
 .venv/bin/python telegram_listener.py
@@ -470,20 +494,20 @@ sqlite3 state.db "SELECT email, reason FROM suppressed;"
 
 ### Déploiement systemd (user, rootless) — identique à MailManager
 ```bash
-cp prepare-campaign.service prepare-campaign.timer mail-listener.service \
+cp prepare-campaign.service prepare-campaign.timer campaign-listener.service \
    ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now prepare-campaign.timer
-systemctl --user enable --now mail-listener.service
+systemctl --user enable --now campaign-listener.service
 loginctl enable-linger claudeuser     # survie hors session SSH (always-on)
 ```
 
 ### Supervision
 ```bash
 systemctl --user list-timers
-systemctl --user status mail-listener.service
+systemctl --user status campaign-listener.service
 journalctl --user -u prepare-campaign.service -n 50 --no-pager
-journalctl --user -u mail-listener.service -f
+journalctl --user -u campaign-listener.service -f
 ```
 
 ---
@@ -516,10 +540,12 @@ ignoré (même logique que MailManager).
 
 ### Commandes de pilotage (depuis Telegram)
 
-En plus des brouillons poussés par le timer, le listener accepte des **commandes**
-pour piloter la rédaction à la demande, en s'appuyant sur l'autonomie de l'agent.
-**Aucune ne déclenche d'envoi** : elles préparent des brouillons, l'envoi reste
-le tap « Envoyer »/« Diffuser » (Règles d'Or #1 et #2).
+Le listener accepte des **commandes** pour piloter la rédaction à la demande, en
+s'appuyant sur l'autonomie de l'agent. **`/mail` est la commande principale**
+(diffusion à la base) ; les autres sont la prospection 1:1 à la demande (le timer
+ne pousse plus de brouillon 1:1 automatiquement). **Aucune ne déclenche d'envoi** :
+elles préparent des brouillons, l'envoi reste le tap « Envoyer »/« Diffuser »
+(Règles d'Or #1 et #2).
 
 - **`/prospect <email> [consigne]`** — rédige un mail de prospection 1:1 ad-hoc
   pour **un** abonné précis, poussé avec les boutons habituels (Envoyer / Éditer /
@@ -535,8 +561,11 @@ le tap « Envoyer »/« Diffuser » (Règles d'Or #1 et #2).
   single-touch et ne pas bloquer le listener mono-thread.
 - **`/who [N]`** — aperçu **lecture seule** des prochains prospects éligibles
   (aucune rédaction, aucun envoi), pour décider qui cibler.
-- **`/mail <sujet>`** — rédige un mail pour **toute la base** (cf. section
-  diffusion plus bas) : Valider → test à l'opérateur → diffusion confirmée.
+- **`/mail <sujet>` (canal PRINCIPAL)** — rédige un mail pour **toute la base
+  opt-in** (prospects *et* clients), pour convertir. Flux : Valider → **aperçu
+  (objet RÉEL) à toi seul** → confirmation « Diffuser à N » → diffusion batch
+  individuelle. ⚠️ L'aperçu n'a **aucun préfixe** « test » dans l'objet : il est
+  identique au mail diffusé (le « ceci est un aperçu » est dit dans Telegram).
 
 Ces commandes ne créent **aucun nouveau chemin d'envoi** : `/prospect` et
 `/prospects` réutilisent le `pending` + le handler `send` existants ; seul

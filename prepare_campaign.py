@@ -1,7 +1,15 @@
-"""Job de préparation de campagne (déclenché par prepare-campaign.timer, 1×/jour
-ouvré).
+"""Module de préparation — ciblage, contexte de rédaction, et composition.
 
-(1) Interroge Supabase (LECTURE SEULE) pour la liste opt-in et les clients KERNEL
+RECENTRAGE : la fonction PRINCIPALE de l'agent est désormais la DIFFUSION à toute
+la base opt-in (commande /mail depuis Telegram, pour convertir). La prospection
+1:1 automatique est DÉSACTIVÉE : `main()` (point d'entrée du timer) ne prépare
+plus de lot quotidien (cf. `run_daily_prospection`, conservée mais non appelée par
+défaut). Les commandes /prospect, /prospects, /who (prospection 1:1 à la demande)
+restent pilotées par le listener, qui importe d'ici `build_context`,
+`select_prospects`, `process_one`, `compose_broadcast`, `recompose_broadcast`.
+
+Quand il s'exécute, ce module :
+(1) interroge Supabase (LECTURE SEULE) pour la liste opt-in et les clients KERNEL
     à exclure ; (2) calcule les prospects éligibles (jamais contactés, non
     désinscrits) ; (3) en retient un petit lot ; (4) pour chacun, construit le
     contexte (campaign_context + corpus + angle douleur) et appelle Claude pour
@@ -401,9 +409,16 @@ def process_one(conn, chat_id, context: str, prospect: dict, directive: str = ""
 
 
 # --------------------------------------------------------------------------- #
-# Entrée
+# Lot de prospection 1:1 — DÉSACTIVÉ par défaut (recentrage sur la diffusion /mail)
 # --------------------------------------------------------------------------- #
-def main() -> None:
+def run_daily_prospection() -> None:
+    """Prépare un lot de mails de PROSPECTION 1:1 (ciblage + rédaction + notif).
+
+    ⚠️ N'EST PLUS appelée automatiquement : l'agent est recentré sur la DIFFUSION à
+    toute la base (commande /mail). Conservée pour un usage manuel ou une
+    réactivation explicite (cf. main() / variable PROSPECTION_AUTORUN). N'ENVOIE
+    JAMAIS de mail (Règles d'Or #1 et #2) : elle ne fait que préparer des `pending`.
+    """
     common.load_env()
     # Auth du modèle via l'abonnement Claude (credentials de Claude Code), pas via
     # une clé API : le SDK lit CLAUDE_CODE_OAUTH_TOKEN dans l'environnement. NE
@@ -470,6 +485,33 @@ def main() -> None:
 
     conn.close()
     logger.info("Run de préparation terminé (%d brouillon(s) préparé(s)).", prepared)
+
+
+# --------------------------------------------------------------------------- #
+# Entrée (timer prepare-campaign)
+# --------------------------------------------------------------------------- #
+def main() -> None:
+    """Point d'entrée du timer.
+
+    🎯 RECENTRAGE : la prospection 1:1 AUTOMATIQUE est DÉSACTIVÉE. L'objectif de
+    l'agent est la DIFFUSION à toute la base opt-in (pour convertir), déclenchée
+    MANUELLEMENT via la commande /mail depuis Telegram — pas l'envoi de mails 1:1 à
+    des prospects isolés. Le timer ne prépare donc plus aucun brouillon 1:1.
+
+    Les commandes /prospect, /prospects, /who restent disponibles À LA DEMANDE
+    (elles passent par le listener, pas par cette fonction). Pour réactiver le lot
+    quotidien 1:1, poser PROSPECTION_AUTORUN=1 dans l'environnement. Aucun envoi
+    ici dans tous les cas (Règles d'Or #1 et #2)."""
+    common.load_env()
+    if os.environ.get("PROSPECTION_AUTORUN") == "1":
+        logger.info("PROSPECTION_AUTORUN=1 : préparation du lot de prospection 1:1.")
+        run_daily_prospection()
+        return
+    logger.info(
+        "Auto-prospection 1:1 désactivée (recentrage sur la diffusion à la base "
+        "via /mail). Aucun brouillon 1:1 préparé ce run. Pour réactiver : "
+        "PROSPECTION_AUTORUN=1. Le timer prepare-campaign peut être désactivé."
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+[Unit]
+Description=Agent Prospection FrenchQuant — sync des suppressions Mailgun (desinscriptions / plaintes / bounces) vers suppressed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/frenchquant/mailing_agent
+EnvironmentFile=%h/frenchquant/mailing_agent/.env
+# Cohérent avec prepare-campaign.service : PATH explicite (~/.local/bin pour Node/claude
+# n'est pas requis ici, mais on garde le même PATH par homogénéité).
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/frenchquant/mailing_agent/.venv/bin/python sync_suppressions.py

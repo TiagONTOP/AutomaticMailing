@@ -1,0 +1,10 @@
+[Unit]
+Description=Declenche la sync des suppressions Mailgun (horaire)
+
+[Timer]
+# Toutes les heures. Persistent=true rattrape un run manque (machine off).
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

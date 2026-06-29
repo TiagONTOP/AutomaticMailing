@@ -1,11 +1,12 @@
 # Agent Prospection FrenchQuant (AutomaticMailing)
 
-Pendant *sortant* (outbound) de `MailManager`. De façon planifiée, l'agent
-**identifie des prospects tièdes** dans Supabase (abonnés newsletter qui n'ont
-pas acheté FQ-KERNEL), **rédige un mail de prospection 1:1 ultra-personnalisé**
-dans la voix FrenchQuant, et **pousse un récap sur Telegram avec des boutons de
-validation**. **Aucun mail n'est jamais envoyé sans une action explicite depuis
-Telegram.**
+Pendant *sortant* (outbound) de `MailManager`. Fonction **principale** : **diffuser
+un mail à TOUTE la base opt-in** (abonnés newsletter — prospects *et* clients) pour
+**en convertir certains** vers FQ-KERNEL, dans la voix FrenchQuant, déclenché **à la
+main** via `/mail` depuis Telegram. **En option à la demande**, l'agent rédige aussi
+des mails de **prospection 1:1** ultra-personnalisés (`/prospect`, `/prospects`,
+`/who`) — single-touch, **plus aucun lot automatique** (le timer ne pousse plus de
+1:1). **Aucun mail n'est jamais envoyé sans une action explicite depuis Telegram.**
 
 > La documentation de référence (architecture, modèle de données, **Règles
 > d'Or**) est dans [CLAUDE.md](CLAUDE.md). Lis-le avant toute modification.
@@ -18,8 +19,10 @@ Telegram.**
 - **Pas d'auto-envoi** : tout part d'un tap Telegram.
 - **Supabase en LECTURE SEULE** : uniquement des `SELECT`. Tout l'état
   (`contacted`/`pending`/`suppressed`) vit dans le SQLite local `state.db`.
-- **Single-touch & opt-out sacré** : un prospect contacté une seule fois, chaque
-  mail porte identité + désinscription, désinscription honorée définitivement.
+- **Single-touch (prospection) & opt-out sacré (partout)** : en prospection 1:1 un
+  prospect n'est contacté qu'une fois (`contacted`) ; la diffusion `/mail` est
+  répétable mais exclut toujours les `suppressed`. Chaque mail porte identité +
+  désinscription ; toute désinscription est honorée définitivement.
 - **Verrou `TELEGRAM_CHAT_ID`** : tout update d'un autre chat est ignoré.
 - **Secrets hors du repo** (`.env`, `state.db` non commités).
 - **Contenu externe = donnée non fiable** (anti-injection).
@@ -39,8 +42,9 @@ claude setup-token                   # -> reporter dans CLAUDE_CODE_OAUTH_TOKEN 
 # (optionnel) construire le corpus distillé depuis l'arbo locale
 .venv/bin/python build_corpus.py
 
-# préparer une campagne à la main (cible + rédige + notifie, PAS d'envoi)
-.venv/bin/python prepare_campaign.py
+# la diffusion à la base se pilote via /mail dans Telegram (listener ci-dessous).
+# `prepare_campaign.py` (timer) est un no-op par défaut ; pour rejouer le lot 1:1 :
+PROSPECTION_AUTORUN=1 .venv/bin/python prepare_campaign.py   # PAS d'envoi (prépare des pending)
 
 # lancer le listener (Ctrl-C pour stopper) — SEUL à envoyer
 .venv/bin/python telegram_listener.py
@@ -61,7 +65,7 @@ sqlite3 state.db "SELECT email, reason FROM suppressed;"
 
 | Fichier | Rôle |
 |---|---|
-| `prepare_campaign.py` | Préparation (timer) : cible Supabase, rédige, notifie. **Jamais d'envoi.** |
+| `prepare_campaign.py` | Module importé par le listener (`/mail` + prospection à la demande) **et** point d'entrée du timer. ⚠️ Son `main()` (timer) est un **no-op** par défaut (auto-1:1 désactivée) — `run_daily_prospection()` n'est rejoué qu'avec `PROSPECTION_AUTORUN=1`. **Jamais d'envoi.** |
 | `telegram_listener.py` | Listener always-on : boutons + édition. **Seul à envoyer (Mailgun).** |
 | `discover_pains.py` | (optionnel) social listening → `corpus/pains.md`. À relire. |
 | `common.py` | Helpers partagés (env, logging, Supabase read-only, SQLite, Telegram, pied de conformité). |
@@ -69,7 +73,7 @@ sqlite3 state.db "SELECT email, reason FROM suppressed;"
 | `corpus/` | Voix & matière (texte uniquement) : `offers.md`, `voice.md`, `pains.md`, `scripts/`, `notebooks/`. |
 | `templates/` | Squelette de mail / signature (référence). |
 | `build_corpus.py` | Exporte notebooks `_release`→md + copie scripts (local, puis rsync). |
-| `prepare-campaign.service` / `.timer`, `mail-listener.service` | Units systemd (user, rootless). |
+| `prepare-campaign.service` / `.timer`, `campaign-listener.service` | Units systemd (user, rootless). |
 
 ## Flux Telegram (validation)
 
@@ -96,8 +100,22 @@ Pour chaque prospect préparé :
 
 Deux modes d'envoi bien distincts. Aucun ne part sans ton action explicite.
 
-**Prospection 1:1 (single-touch, quelques mails ultra-personnalisés)** — c'est ce
-que fait le timer automatiquement, et que tu peux déclencher à la main :
+**Diffusion batch à TOUTE la base (fonction PRINCIPALE — un seul mail pour tout le
+monde)** :
+
+| Commande | Effet |
+|---|---|
+| `/mail <sujet>` | L'agent rédige **un** mail pour **toute la base opt-in** (prospects *et* clients), pour convertir. Flux : ✅ Valider (→ tu reçois un **aperçu**, avec le **vrai objet**, à toi seul) → ✏️ Éditer (re-rédaction en langage naturel) → 📣 **Diffuser à N** (envoi **batch individuel** via Mailgun à tout l'opt-in, hors désinscrits et hors toi). |
+| `/help` | Rappel des commandes. |
+
+> 💡 **« Envoyer le même mail à toute ma base » = `/mail`**, pas la prospection.
+> La diffusion couvre **tout l'opt-in** ; chaque destinataire reçoit un message
+> individuel (il ne voit pas les autres adresses), avec identité + désinscription.
+> Les désinscrits (`suppressed`) sont exclus. L'**aperçu** envoyé à la validation
+> a le **vrai objet** (aucun préfixe « test ») : c'est exactement le mail diffusé.
+
+**Prospection 1:1 (option, à la demande — single-touch, quelques mails
+ultra-personnalisés)** :
 
 | Commande | Effet |
 |---|---|
@@ -105,22 +123,11 @@ que fait le timer automatiquement, et que tu peux déclencher à la main :
 | `/prospects [N]` | Sélectionne jusqu'à `N` prospects éligibles et rédige un mail pour chacun (borné, défaut `CAMPAIGN_BATCH_SIZE`, max 10). |
 | `/who [N]` | Aperçu (lecture seule) des prochains prospects éligibles. |
 
-> ⚠️ La prospection est **volontairement bornée** (single-touch, qualité maximale).
-> Elle prépare quelques brouillons 1:1 **puis s'arrête** : ce n'est pas un bug,
-> c'est la stratégie d'envoi retenue (cf. [CLAUDE.md](CLAUDE.md)). Elle n'arrose
-> jamais toute la base.
-
-**Diffusion batch à TOUTE la base (un seul mail pour tout le monde)** :
-
-| Commande | Effet |
-|---|---|
-| `/mail <sujet>` | L'agent rédige **un** mail pour **toute la base opt-in**. Flux : ✅ Valider (→ tu reçois un **test**) → ✏️ Éditer (re-rédaction en langage naturel) → 📣 **Diffuser à N** (envoi **batch individuel** via Mailgun à tout l'opt-in, hors désinscrits). |
-| `/help` | Rappel des commandes. |
-
-> 💡 **« Envoyer le même mail à toute ma base » = `/mail`**, pas la prospection.
-> La diffusion couvre **tout l'opt-in** (prospects *et* clients) ; chaque
-> destinataire reçoit un message individuel (il ne voit pas les autres adresses),
-> avec identité + désinscription. Les désinscrits (`suppressed`) sont exclus.
+> ⚠️ La prospection 1:1 est **à la demande** et **volontairement bornée**
+> (single-touch). ⚠️ Elle **n'est plus automatique** : le timer ne prépare plus de
+> lot 1:1 (recentrage sur la diffusion). Pour réactiver le lot quotidien :
+> `PROSPECTION_AUTORUN=1` (cf. [CLAUDE.md](CLAUDE.md)). Elle n'arrose jamais toute
+> la base — pour ça, c'est `/mail`.
 
 ## Déploiement systemd (user, rootless) — identique à MailManager
 
@@ -130,21 +137,25 @@ modèle sur le VPS : Node.js + la CLI Claude Code (`npm i -g
 `CLAUDE_CODE_OAUTH_TOKEN` (abonnement, pas de clé API).
 
 ```bash
-cp prepare-campaign.service prepare-campaign.timer mail-listener.service \
+cp prepare-campaign.service prepare-campaign.timer campaign-listener.service \
    ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now prepare-campaign.timer
-systemctl --user enable --now mail-listener.service
+systemctl --user enable --now campaign-listener.service   # listener (toujours actif)
 loginctl enable-linger claudeuser     # survie hors session SSH (always-on)
+
+# ⚠️ Le timer de prospection 1:1 N'EST PLUS activé par défaut (recentrage sur la
+# diffusion /mail). Si un ancien timer tourne encore, désactive-le :
+systemctl --user disable --now prepare-campaign.timer
+# (Ne le réactive QUE si tu veux le lot quotidien 1:1, avec PROSPECTION_AUTORUN=1.)
 ```
 
 ### Supervision
 
 ```bash
 systemctl --user list-timers
-systemctl --user status mail-listener.service
+systemctl --user status campaign-listener.service
 journalctl --user -u prepare-campaign.service -n 50 --no-pager
-journalctl --user -u mail-listener.service -f
+journalctl --user -u campaign-listener.service -f
 ```
 
 ## Délivrabilité & conformité

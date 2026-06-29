@@ -1,5 +1,5 @@
 [Unit]
-Description=Agent Prospection FrenchQuant — preparation (ciblage + redaction + notifications, sans envoi)
+Description=Agent Prospection FrenchQuant — lot 1:1 (DESACTIVE par defaut : main() no-op sauf PROSPECTION_AUTORUN=1 ; jamais d'envoi)
 After=network-online.target
 Wants=network-online.target
 

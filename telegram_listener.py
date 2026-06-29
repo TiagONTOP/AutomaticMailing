@@ -1,17 +1,17 @@
-"""Listener Telegram (always-on, mail-listener.service, Restart=always).
+"""Listener Telegram (always-on, campaign-listener.service, Restart=always).
 
 Tourne en continu en long-polling (getUpdates). Traite :
 - les boutons des brouillons de PROSPECTION (send / edit / skip / block) ;
 - les COMMANDES de prospection ad-hoc (/prospect <email>, /prospects [N], /who) :
   l'agent rédige à la demande des mails 1:1 pour un ou plusieurs abonnés ;
 - la COMMANDE de diffusion (/mail <sujet>) pour composer un mail à toute la base
-  (« test puis diffusion »), et /help ;
+  (« aperçu puis diffusion »), et /help ;
 - les boutons de DIFFUSION (bcast / bgo / bedit / bcancel) ;
 - les réponses en mode édition (prospection ou diffusion).
 
 SEUL COMPOSANT AUTORISÉ À ENVOYER UN MAIL (Règle d'Or #1) : les DEUX points
 d'envoi Mailgun du projet vivent ici — send_campaign_email() (1 destinataire,
-prospection + test de diffusion) et send_broadcast_email() (diffusion batch à la
+prospection + aperçu de diffusion) et send_broadcast_email() (diffusion batch à la
 base). Tous deux ne partent que sur action explicite de l'utilisateur (Règle #2).
 
 Toute communication entrante est filtrée par TELEGRAM_CHAT_ID (Règle d'Or #5).
@@ -36,24 +36,24 @@ BROADCAST_BATCH_SIZE = 1000
 
 HELP_TEXT = (
     "Commandes disponibles :\n\n"
-    "PROSPECTION (mails 1:1, single-touch) :\n"
-    "• /prospect <email> [consigne] — l'agent rédige un mail de prospection ad-hoc "
-    "pour CE contact (doit être un abonné opt-in jamais contacté). La consigne est "
-    "optionnelle (ex. « insiste sur l'accès au code source »). Validation par les "
-    "boutons Envoyer / Éditer / Ignorer / Ne plus contacter.\n"
-    "• /prospects [N] — l'agent choisit lui-même jusqu'à N prospects éligibles et "
-    "rédige un mail pour chacun (défaut : CAMPAIGN_BATCH_SIZE).\n"
-    "• /who [N] — aperçu (lecture seule) des prochains prospects éligibles, sans "
-    "rédaction ni envoi.\n\n"
-    "DIFFUSION À LA BASE :\n"
-    "• /mail <consigne> — l'agent rédige un mail pour TOUTE la base. Brouillon : "
-    "Valider / Éditer / Annuler.\n"
+    "📣 DIFFUSION À LA BASE (fonction principale) :\n"
+    "• /mail <consigne> — l'agent rédige un mail pour TOUTE la base opt-in "
+    "(prospects ET clients), pour en convertir. Brouillon : Valider / Éditer / Annuler.\n"
     "   – ✏️ Éditer : dis-lui en langage naturel ce qu'il faut changer, il re-rédige.\n"
-    "   – ✅ Valider : il t'envoie un TEST, puis tu confirmes la diffusion (hors "
-    "désinscrits).\n\n"
+    "   – ✅ Valider : il t'envoie d'abord un APERÇU À TOI SEUL, avec le VRAI objet "
+    "(exactement celui de la diffusion, sans aucun préfixe), pour vérifier le rendu ; "
+    "puis il te montre l'objet réel et le nombre de destinataires. La diffusion ne "
+    "part qu'après un second tap « Diffuser à N » (hors désinscrits, et hors toi).\n\n"
+    "🎯 PROSPECTION 1:1 (option, à la demande, single-touch) :\n"
+    "• /prospect <email> [consigne] — mail de prospection ad-hoc pour CE contact "
+    "(abonné opt-in jamais contacté). Boutons Envoyer / Éditer / Ignorer / Ne plus "
+    "contacter.\n"
+    "• /prospects [N] — l'agent choisit jusqu'à N prospects éligibles et rédige un "
+    "mail pour chacun (défaut : CAMPAIGN_BATCH_SIZE).\n"
+    "• /who [N] — aperçu (lecture seule) des prochains prospects éligibles.\n\n"
     "• /help — cette aide.\n\n"
-    "Aucun mail ne part jamais sans ton action explicite. Les brouillons de "
-    "prospection du timer arrivent aussi automatiquement, avec leurs boutons."
+    "Aucun mail ne part jamais sans ton action explicite. Les désinscrits (réponse "
+    "« STOP », plaintes, bounces) sont retirés automatiquement de la base."
 )
 
 
@@ -93,7 +93,7 @@ def authorized_chat_id(chat_id) -> bool:
 
 
 def _operator_email() -> str:
-    """Adresse qui reçoit les mails de TEST avant diffusion. OPERATOR_EMAIL, sinon
+    """Adresse qui reçoit l'aperçu avant diffusion. OPERATOR_EMAIL, sinon
     le Reply-To, sinon le contact FrenchQuant."""
     return (
         os.environ.get("OPERATOR_EMAIL")
@@ -115,7 +115,7 @@ def _mailgun_base() -> tuple[dict, str, str]:
 
 
 def send_campaign_email(row) -> str:
-    """Envoie un mail à UN destinataire via Mailgun (prospection + test de
+    """Envoie un mail à UN destinataire via Mailgun (prospection + aperçu de
     diffusion).
 
     *** Un des deux uniques points d'appel à l'API d'envoi Mailgun, tous deux dans
@@ -187,16 +187,22 @@ def send_broadcast_email(subject: str, body: str, recipients: list[str]) -> tupl
 def get_broadcast_recipients(conn) -> list[str]:
     """Destinataires d'une diffusion : base opt-in (Supabase, LECTURE SEULE,
     Règle d'Or #3) moins les désinscrits locaux (Règle d'Or #4). Liste unique
-    d'emails (casse/trim normalisés pour la dédup, email d'origine conservé)."""
+    d'emails (casse/trim normalisés pour la dédup, email d'origine conservé).
+
+    Garde-fou anti-doublon : on EXCLUT l'adresse opérateur. Elle reçoit déjà
+    l'APERÇU (objet réel, identique à la diffusion) à la validation ; sans cette
+    exclusion, l'opérateur abonné à la base recevrait aperçu + diffusion = deux
+    fois le même mail (l'aperçu n'ayant plus de préfixe distinctif)."""
     sb = common.supabase_client()
     contacts = common.fetch_newsletter_contacts(sb)
     suppressed = common.fetch_suppressed_emails(conn)
+    operator_key = common.norm_email(_operator_email())
     seen: set[str] = set()
     out: list[str] = []
     for c in contacts:
         email = (c.get("email") or "").strip()
         key = common.norm_email(email)
-        if not key or key in suppressed or key in seen:
+        if not key or key in suppressed or key in seen or key == operator_key:
             continue
         seen.add(key)
         out.append(email)
@@ -470,16 +476,20 @@ def reshow_broadcast(chat_id, message_id, row) -> None:
     )
 
 
-def _send_broadcast_test(subject: str, body: str) -> str:
-    """Envoie le mail de TEST à l'opérateur (via le chemin d'envoi unitaire).
-    Renvoie une note de statut pour Telegram."""
+def _send_broadcast_preview(subject: str, body: str) -> str:
+    """Envoie un APERÇU du mail à l'opérateur (via le chemin d'envoi unitaire).
+
+    L'objet est le VRAI objet — aucun préfixe « [TEST base] » : ce que l'opérateur
+    reçoit est EXACTEMENT ce que la base recevra, pour vérifier le rendu réel. Le
+    fait que ce soit un aperçu est signalé côté Telegram, jamais dans l'objet du
+    mail (qui doit rester identique à la diffusion). Renvoie une note de statut."""
     operator = _operator_email()
     try:
-        send_campaign_email({"email": operator, "subject": f"[TEST base] {subject}", "body": body})
-        return f"📨 Test envoyé à {operator} — vérifie le rendu avant diffusion."
+        send_campaign_email({"email": operator, "subject": subject, "body": body})
+        return f"📨 Aperçu envoyé à {operator} (objet réel, identique à la diffusion) — vérifie le rendu."
     except requests.RequestException as exc:
-        logger.exception("Échec de l'envoi du test de diffusion.")
-        return f"⚠️ Échec de l'envoi du test : {exc}"
+        logger.exception("Échec de l'envoi de l'aperçu de diffusion.")
+        return f"⚠️ Échec de l'envoi de l'aperçu : {exc}"
 
 
 def _recipients_count_note(conn) -> tuple[int | None, str]:
@@ -525,16 +535,17 @@ def handle_mail_command(conn, chat_id, prompt) -> None:
 
 
 def handle_broadcast_validate(conn, chat_id, message_id, token) -> None:
-    """Bouton « Valider » : envoie un TEST à l'opérateur, puis propose la diffusion
-    avec confirmation (flux « test puis broadcast »). Ne diffuse pas encore."""
+    """Bouton « Valider » : envoie un APERÇU (objet réel) à l'opérateur, puis propose
+    la diffusion avec confirmation (flux « aperçu puis diffusion »). Ne diffuse pas
+    encore."""
     row = common.get_broadcast(conn, token)
     if row is None:
         common.tg_edit_message(chat_id, message_id, "⏳ Brouillon introuvable ou déjà traité.")
         return
-    if row["status"] == "sent":  # anti double-diffusion
-        common.tg_edit_message(chat_id, message_id, "✅ Ce mail a déjà été diffusé.")
+    if row["status"] != "draft":  # déjà diffusé ou diffusion en cours
+        common.tg_edit_message(chat_id, message_id, "✅ Ce mail a déjà été diffusé (ou est en cours).")
         return
-    test_note = _send_broadcast_test(row["subject"], row["body"])
+    preview_note = _send_broadcast_preview(row["subject"], row["body"])
     n, _ = _recipients_count_note(conn)
     if n is None:
         common.tg_edit_message(chat_id, message_id, "❌ Destinataires indisponibles (Supabase ?). Réessaie.")
@@ -550,11 +561,16 @@ def handle_broadcast_validate(conn, chat_id, message_id, token) -> None:
             ]
         ]
     }
+    # L'aperçu ci-dessus est parti à l'opérateur avec EXACTEMENT cet objet ; la base
+    # recevra le même. On le rappelle pour lever toute ambiguïté avant de diffuser.
     common.tg_edit_message(
         chat_id, message_id,
-        f"✉️ Objet : {row['subject']}\n\n{test_note}\n\n"
-        f"⚠️ Diffuser à {n} destinataires (base opt-in, hors désinscrits) ? "
-        "Action irréversible.",
+        f"{preview_note}\n"
+        "ℹ️ Cet aperçu (objet réel, sans aucun préfixe) n'est PARTI QU'À TOI — "
+        "ce n'est pas encore la diffusion.\n\n"
+        f"✉️ Objet envoyé à la base : {row['subject']}\n"
+        f"🎯 {n} destinataires opt-in (hors désinscrits et hors toi).\n\n"
+        "⚠️ Diffuser maintenant ? Action irréversible.",
         reply_markup=markup,
     )
 
@@ -574,16 +590,21 @@ def handle_broadcast_go(conn, chat_id, message_id, token) -> None:
     if row is None:
         common.tg_edit_message(chat_id, message_id, "⏳ Brouillon introuvable ou déjà traité.")
         return
-    if row["status"] == "sent":  # anti double-diffusion
-        common.tg_edit_message(chat_id, message_id, "✅ Ce mail a déjà été diffusé.")
+    # Verrou atomique (Règle d'Or #2) : SEUL l'appel qui réussit le passage
+    # 'draft' -> 'sending' diffuse. Tout double-clic / re-déclenchement échoue ici
+    # AVANT le moindre envoi — garde-fou structurel contre la double-diffusion.
+    if not common.claim_broadcast_for_send(conn, token):
+        common.tg_edit_message(chat_id, message_id, "✅ Ce mail a déjà été diffusé (ou est en cours).")
         return
     try:
         recipients = get_broadcast_recipients(conn)
     except Exception as exc:
+        common.revert_broadcast_to_draft(conn, token)  # rien envoyé : réessai possible
         logger.exception("Récupération des destinataires impossible.")
         common.tg_edit_message(chat_id, message_id, f"❌ Destinataires indisponibles : {exc}")
         return
     if not recipients:
+        common.revert_broadcast_to_draft(conn, token)
         common.tg_edit_message(chat_id, message_id, "Aucun destinataire. Rien envoyé.")
         return
 
@@ -591,7 +612,8 @@ def handle_broadcast_go(conn, chat_id, message_id, token) -> None:
     try:
         sent, _ids = send_broadcast_email(row["subject"], row["body"], recipients)
     except requests.RequestException as exc:
-        # Échec : on garde le brouillon pour réessai, on ne marque pas 'sent'.
+        # Échec : le mail n'est pas parti -> on restaure 'draft' pour réessai.
+        common.revert_broadcast_to_draft(conn, token)
         logger.exception("Échec de diffusion (token %s).", token)
         common.tg_send(chat_id, f"❌ Échec de la diffusion : {exc} (brouillon conservé).")
         return
@@ -712,7 +734,7 @@ def handle_command(conn, chat_id, text) -> None:
 # Anti double-clic / anti-spam sur les actions d'ENVOI
 # --------------------------------------------------------------------------- #
 # Un double-tap sur un bouton Telegram genere DEUX callback_query identiques.
-# Sans garde, « Valider » (envoi du test) ou « Diffuser » partent deux fois ->
+# Sans garde, « Valider » (envoi de l'aperçu) ou « Diffuser » partent deux fois ->
 # l'utilisateur recoit le meme mail en double. On deduplique en memoire par
 # (action, token) sur une courte fenetre : un re-clic en rafale du MEME bouton
 # est ignore. Ne concerne QUE les actions qui declenchent un ENVOI (les actions
